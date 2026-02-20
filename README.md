@@ -432,14 +432,70 @@ $ ip -4 a show dev enp7s0f1u3u4
        valid_lft 42182sec preferred_lft 42182sec
 ```
 
-#### Set up PXE
+#### Prepare files PXE Provisioning Server on Workstation
 ```bash
-# Download iPXE bootloader from the official source
-$ sudo curl -o /srv/tftp/ipxe-arch.efi https://archlinux.org/static/netboot/ipxe-arch.efi
+# Download Arch Linux ISO
+$ curl -L -o /tmp/archlinux-x86_64.iso https://mirror.rackspace.com/archlinux/iso/latest/archlinux-x86_64.iso
+# Download its SHA-256 hash
+$ curl -L -o /tmp/sha256sums.txt https://mirror.rackspace.com/archlinux/iso/latest/sha256sums.txt
+
+# Confirm ISO Integrity without using cd, instead using pipes
+$ grep "archlinux-x86_64.iso" /tmp/sha256sums.txt | sed 's|archlinux-x86_64.iso|/tmp/archlinux-x86_64.iso|' | sha256sum -c -
+/tmp/archlinux-x86_64.iso: OK
+
+# Mount the Arch ISO
+$ sudo mount -o loop /tmp/archlinux-x86_64.iso /mnt
+
+# Copy the kernel, initramfs, and squashfs OS images to provisioning server
+$ sudo sudo mkdir -p /srv/http/provision
+$ sudo cp /mnt/arch/boot/x86_64/vmlinuz-linux /srv/http/provision/vmlinuz-linux
+$ sudo cp /mnt/arch/boot/x86_64/initramfs-linux.img /srv/http/provision/initramfs-linux.img
+$ sudo cp -r /mnt/arch /srv/http/provision/arch
+
+# Unmount the ISO
+$ sudo umount /mnt
+
+# Clean up temporary files
+$ rm /tmp/archlinux-x86_64.iso /tmp/sha256sums.txt
+
+# Download vanilla iPXE bootloader from the official source
+$ sudo curl -o /srv/tftp/ipxe-arch.efi https://boot.ipxe.org/x86_64-efi/ipxe.efi
 
 # Modify permissions so that TFTP daemon can read the file
 $ sudo chmod 644 /srv/tftp/ipxe-arch.efi
+```
 
+#### Write custom iPXE file on Workstation
+```bash
+$ sudo tee /srv/http/provision/boot.ipxe > /dev/null << 'EOF'
+#!ipxe
+echo =========================================
+echo Arch Linux Provisioning Service v1.0
+echo =========================================
+
+# Ensure the interface is fully initialized
+dhcp
+
+# Set the base URL variable for your Workstation
+set srv http://192.168.1.181/provision
+
+# Load the kernel and inject the local HTTP hooks and automation script
+kernel ${srv}/vmlinuz-linux ip=dhcp archisobasedir=arch archiso_http_srv=${srv}/ script=${srv}/autoinstall.sh
+initrd ${srv}/initramfs-linux.img
+
+# Execute
+boot
+EOF
+```
+
+#### Write custom installation script on Workstation
+
+```bash
+
+```
+
+#### Start the Provisioning Servers on Workstation
+```bash
 # Edit TFTP IP
 $ sudo bash -c 'echo "TFTPD_ARGS=\"--verbose --user nobody --address 192.168.1.181:69 --secure /srv/tftp\"" > /etc/conf.d/tftpd'
 
@@ -450,35 +506,36 @@ $ sudo systemctl start tftpd.service
 $ ss -uln | grep 192.168.1.181:69
 UNCONN 0      0                                 192.168.1.181:69         0.0.0.0:*
 
-# Monitor TFTP logs on a secondary tab
-$ sudo journalctl -u tftpd -f
-systemd[1]: Starting hpa's original TFTP daemon...
-systemd[1]: Started hpa's original TFTP daemon.
+# Start HTTP
+$ sudo python3 -m http.server 80 --directory /srv/http/provision
+Serving HTTP on 0.0.0.0 port 80 (http://0.0.0.0:80/) ...
+```
 
+#### Configure Router to direct Laptop to Workstation Servers
+```bash
 $ ssh openwrt
-# Configure Router to redirect BOOTP requests to the Workstation
-root@OpenWrt:~# uci set dhcp.linux='boot'
-root@OpenWrt:~# uci set dhcp.linux.filename='ipxe-arch.efi'
-root@OpenWrt:~# uci set dhcp.linux.serveraddress='192.168.1.181'
-root@OpenWrt:~# uci set dhcp.linux.servername='workstation-arch'
+# Tag DHCP Broadcasts that include iPXE in their headers as 'ipxe'
+root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_userclass='set:ipxe,iPXE'
+# If not 'ipxe', direct to TFTP
+root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_boot='tag:!ipxe,ipxe.efi,192.168.1.181,192
+.168.1.181'
+# If 'ipxe', direct to iPXE
+root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_boot='tag:ipxe,http://192.168.1.181/provis
+ion/boot.ipxe,192.168.1.181,192.168.1.181'
 root@OpenWrt:~# uci commit dhcp
 root@OpenWrt:~# /etc/init.d/dnsmasq restart
 
 # Confirm that the setting was applied
 root@OpenWrt:~# cat /var/etc/dnsmasq.conf.cfg* | grep dhcp-boot
-dhcp-boot=ipxe-arch.efi,workstation-arch,192.168.1.181
+dhcp-boot=tag:!ipxe,ipxe.efi,192.168.1.181,192.168.1.181 tag:ipxe,http://192.168.1.181/provision/boot.ipxe,192.168.1.181,192.168.1.181
 root@OpenWrt:~# exit
-
-# Monitor TFTP Server Behavior on second terminal tab
-$ sudo journalctl -u tftpd -f
-# Monitor DHCP and TFTP frames on third terminal tab
-$ sudo tcpdump -i enp7s0f1u3u4 -e -nn -vvv -s0 port 67 or port 68 or 69
-tcpdump: listening on enp7s0f1u3u4, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 ```
 
-#### Install OS on Laptop
+### Provision Laptop
 Go to your laptop and power it on. Repeatedly press the Fx keys as soon as the laptop starts booting. Disable Secure Boot (Since iPXE is not signed by Microsoft), enable Network Boot, and select PXE Boot.
 
 ```bash
 
 ```
+
+Day 2 took significantly longer than I thought. PXE was quite fragile and I learned a lot while troubleshooting. Read a lot of tcpdump output to diagnose what exactly was going wrong. On Day 3 I will finish the autoinstall.sh script and automatically provision my Laptop with Arch Linux. I will then write an Ansible playbook that does the rest of the configuration, completing the interventionless workflow.
