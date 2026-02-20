@@ -1,8 +1,10 @@
-# cloudflare_ai_routing
+# Cloudflare Workers AI Routing Project
 Custom routing solution which utilizes Workers AI of Cloudflare for Students.
 
 ## Day 1: Router & Workstation Setup
 To have full control of the router, we replace the stock firmware with a open source firmware. I chose [OpenWRT](https://openwrt.org/). I used the [TP-Link Archer C7 AC1750 v5](https://www.tp-link.com/us/home-networking/wifi-router/archer-c7/). I prepared an Arch Linux Workstation which is used to configure the router.
+
+The Router is only connected to the Workstation. It does not have access to either the Internet nor the Intranet at this time. The Workstation currently has a connection to the Internet via other Routers that have already been configured.
 
 ### Download Router Firmware
 #### GUI Download
@@ -238,7 +240,7 @@ $ cp 192.168.1.1+2.pem openwrt.pem
 $ openssl pkey -in 192.168.1.1+2-key.pem -traditional -out openwrt-key.pem
 ```
 
-Connect Router to Internet if you haven't already
+Modern Linux distributions use SFTP instead of SCP when using the ```scp``` commmand. Since OpenWRT doesn't come with SCP by default, we need to finally connect the Router to the Internet to install the SFTP package. Alternatively, we could have built a custom OpenWRT image that included this specific package, or use ```scp```'s ```-O``` flag, which uses the legacy SCP protocol instead.
 
 ```bash
 # Install SFTP on Router which is used instead of SCP
@@ -267,3 +269,216 @@ $ ssh -S /tmp/openwrt_gui -O exit openwrt
 ```
 
 End of Day 1. Locked down the Router and configured secure in-site access. I plan to install a VPN service to enable remote maintenance tomorrow.
+
+## Day 2: Laptop Setup
+
+### Configure Provisioning Environment
+Now that the router is locked down both my Workstation and my Laptop are connected to it, through which outbound traffic goes through. The Workstation no longer has a separate connection. I restarted both the Router and the Workstation to confirm that Router settings persist through reboots. I moved the USB-to-Ethernet adapter I am using from the front to the back for stability.
+
+#### Set up Static IP
+```bash
+# Check IP Address
+$ ip -4 a show dev enp7s0f1u3u4    # Interface Name changed because I moved the UtE Adapter to a different port
+5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    inet 192.168.1.181/24 brd 192.168.1.255 scope global dynamic noprefixroute enp7s0f1u3u4
+       valid_lft 41483sec preferred_lft 41483sec
+```
+
+Although the Router was rebooted, the Workstation requested the same IP and succeeded. Since PXE requires a fixed address, we will use Static IP to guarantee that the Workstation's IP never changes.
+
+```bash
+# Find MAC Address
+$ ip link show dev enp7s0f1u3u4
+5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether [USB-to-Ethernet Adapter MAC] brd ff:ff:ff:ff:ff:ff
+
+# Configure Static IP on Router
+$ ssh openwrt
+root@OpenWrt:~# uci add dhcp host
+cfg05fe63
+root@OpenWrt:~# uci set dhcp.@host[-1].name='workstation-arch'
+root@OpenWrt:~# uci set dhcp.@host[-1].mac='[USB-to-Ethernet Adapter MAC]'
+root@OpenWrt:~# uci set dhcp.@host[-1].ip='192.168.1.181'
+root@OpenWrt:~# uci commit dhcp
+root@OpenWrt:~# /etc/init.d/dnsmasq restart
+udhcpc: started, v1.36.1
+udhcpc: broadcasting discover
+udhcpc: no lease, failing
+```
+
+#### Meticulously Confirm Static IP is working Server-side
+```bash
+# Reboot
+root@OpenWrt:~# reboot
+root@OpenWrt:~# Connection to 192.168.1.1 closed by remote host.
+Connection to 192.168.1.1 closed.
+
+# Stop NetworkManager
+$ sudo systemctl stop NetworkManager
+
+# Delete Connection Profiles
+$ sudo find /etc/NetworkManager/system-connections/ -type f -delete    # This deletes all profiles, if you have other profiles for Wi-Fi, etc., narrow your delete range
+
+# Delete the persistent lease files in the Workstation
+$ sudo find /var/lib/NetworkManager/ -name "*.lease" -delete    # Same, this deletes all leases
+```
+
+Before restarting NetworkManager, open a second terminal tab and use ```tcpdump``` so that the frames can be captured.
+```bash
+# Port 67 for the DHCP server, Port 68 for the DHCP client
+$ sudo tcpdump -i enp7s0f1u3u4 port 67 or port 68 -env
+tcpdump: listening on enp7s0f1u3u4, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+```
+
+Return to the first terminal and restart NetworkManager.
+```bash
+# Restart NetworkManager to force a pure DHCPDISCOVER
+$ sudo systemctl start NetworkManager
+```
+
+Then look at the frames captured by ```tcpdump```.
+```bash
+14:22:39.306461 [Router MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [Router MAC], length 300, xid 0x18dfdab1, Flags [none]
+	  Client-Ethernet-Address [Router MAC]
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 12: "udhcp 1.36.1"
+	    Client-ID (61), length 7: ether [Router MAC]
+	    
+14:22:43.671920 [USB-to-Ethernet Adapter MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 318: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 304)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [USB-to-Ethernet Adapter MAC], length 276, xid 0x787404e9, secs 7, Flags [none]
+	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    Client-ID (61), length 7: ether [USB-to-Ethernet Adapter MAC]
+	    Parameter-Request (55), length 17: 
+	      Subnet-Mask (1), Time-Zone (2), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), MTU (26), BR (28), Classless-Static-Route (121)
+	      Default-Gateway (3), Static-Route (33), YD (40), YS (41)
+	      NTP (42), Unknown (119), Classless-Static-Route-Microsoft (249), Unknown (252)
+	      RP (17)
+	    MSZ (57), length 2: 576
+	    
+14:22:43.685745 [Router MAC] > [USB-to-Ethernet Adapter MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3137, offset 0, flags [none], proto UDP (17), length 343)
+    192.168.1.1.67 > 192.168.1.181.68: BOOTP/DHCP, Reply, length 315, xid 0x787404e9, secs 7, Flags [none]
+	  Your-IP 192.168.1.181
+	  Server-IP 192.168.1.1
+	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Server-ID (54), length 4: 192.168.1.1
+	    Lease-Time (51), length 4: 43200
+	    RN (58), length 4: 21600
+	    RB (59), length 4: 37800
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    BR (28), length 4: 192.168.1.255
+	    Default-Gateway (3), length 4: 192.168.1.1
+	    Domain-Name-Server (6), length 4: 192.168.1.1
+	    Domain-Name (15), length 3: "lan"
+	    Hostname (12), length 16: "workstation-arch"
+	    
+14:22:43.685825 [USB-to-Ethernet Adapter MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 330: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 316)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [USB-to-Ethernet Adapter MAC], length 288, xid 0x787404e9, secs 7, Flags [none]
+	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    Client-ID (61), length 7: ether [USB-to-Ethernet Adapter MAC]
+	    Parameter-Request (55), length 17: 
+	      Subnet-Mask (1), Time-Zone (2), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), MTU (26), BR (28), Classless-Static-Route (121)
+	      Default-Gateway (3), Static-Route (33), YD (40), YS (41)
+	      NTP (42), Unknown (119), Classless-Static-Route-Microsoft (249), Unknown (252)
+	      RP (17)
+	    MSZ (57), length 2: 576
+	    Requested-IP (50), length 4: 192.168.1.181
+	    Server-ID (54), length 4: 192.168.1.1
+	    
+14:22:43.701104 [Router MAC] > [USB-to-Ethernet Adapter MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3138, offset 0, flags [none], proto UDP (17), length 343)
+    192.168.1.1.67 > 192.168.1.181.68: BOOTP/DHCP, Reply, length 315, xid 0x787404e9, secs 7, Flags [none]
+	  Your-IP 192.168.1.181
+	  Server-IP 192.168.1.1
+	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Server-ID (54), length 4: 192.168.1.1
+	    Lease-Time (51), length 4: 43200
+	    RN (58), length 4: 21600
+	    RB (59), length 4: 37800
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    BR (28), length 4: 192.168.1.255
+	    Default-Gateway (3), length 4: 192.168.1.1
+	    Domain-Name-Server (6), length 4: 192.168.1.1
+	    Domain-Name (15), length 3: "lan"
+	    Hostname (12), length 16: "workstation-arch"
+```
+
+The first frame is the Router initiating DORA with the upstream network. Only the Discovery was caught because only Discover and Request are broadcast frames, and by the time the Request frame came back, the Router likely contained the WAN interface. The next four frames each represent each of the DORA sequence between the Workstation and the Router.
+
+```bash
+# Confirm that Static IP allocation is happening due to Router settings and not Client-side cache
+$ ip -4 a show dev enp7s0f1u3u4
+5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    inet 192.168.1.181/24 brd 192.168.1.255 scope global dynamic noprefixroute enp7s0f1u3u4
+       valid_lft 42182sec preferred_lft 42182sec
+```
+
+#### Set up PXE
+```bash
+# Download iPXE bootloader from the official source
+$ sudo curl -o /srv/tftp/ipxe-arch.efi https://archlinux.org/static/netboot/ipxe-arch.efi
+
+# Modify permissions so that TFTP daemon can read the file
+$ sudo chmod 644 /srv/tftp/ipxe-arch.efi
+
+# Edit TFTP IP
+$ sudo bash -c 'echo "TFTPD_ARGS=\"--verbose --user nobody --address 192.168.1.181:69 --secure /srv/tftp\"" > /etc/conf.d/tftpd'
+
+# Start TFTP
+$ sudo systemctl start tftpd.service
+
+# Confirm that TFTP is listening on 192.168.1.181:69
+$ ss -uln | grep 192.168.1.181:69
+UNCONN 0      0                                 192.168.1.181:69         0.0.0.0:*
+
+# Monitor TFTP logs on a secondary tab
+$ sudo journalctl -u tftpd -f
+systemd[1]: Starting hpa's original TFTP daemon...
+systemd[1]: Started hpa's original TFTP daemon.
+
+$ ssh openwrt
+# Configure Router to redirect BOOTP requests to the Workstation
+root@OpenWrt:~# uci set dhcp.linux='boot'
+root@OpenWrt:~# uci set dhcp.linux.filename='ipxe-arch.efi'
+root@OpenWrt:~# uci set dhcp.linux.serveraddress='192.168.1.181'
+root@OpenWrt:~# uci set dhcp.linux.servername='workstation-arch'
+root@OpenWrt:~# uci commit dhcp
+root@OpenWrt:~# /etc/init.d/dnsmasq restart
+
+# Confirm that the setting was applied
+root@OpenWrt:~# cat /var/etc/dnsmasq.conf.cfg* | grep dhcp-boot
+dhcp-boot=ipxe-arch.efi,workstation-arch,192.168.1.181
+root@OpenWrt:~# exit
+
+# Monitor TFTP Server Behavior on second terminal tab
+$ sudo journalctl -u tftpd -f
+# Monitor DHCP and TFTP frames on third terminal tab
+$ sudo tcpdump -i enp7s0f1u3u4 -e -nn -vvv -s0 port 67 or port 68 or 69
+tcpdump: listening on enp7s0f1u3u4, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+```
+
+#### Install OS on Laptop
+Go to your laptop and power it on. Repeatedly press the Fx keys as soon as the laptop starts booting. Disable Secure Boot (Since iPXE is not signed by Microsoft), enable Network Boot, and select PXE Boot.
+
+```bash
+
+```
