@@ -1,0 +1,25 @@
+#!ipxe
+
+echo ============================================
+echo            Arch Linux IPXE
+echo ============================================
+
+set BASEURL http://192.168.1.181
+set extrabootoptions ip=dhcp copytoram=y rfkill.default_state=0 ipv6.disable=1 script=${BASEURL}/autoinstall.sh
+
+echo Downloading and Verifying Kernel...
+kernel ${BASEURL}/vmlinuz-linux || goto failed
+
+echo Downloading and Verifying Initramfs...
+initrd ${BASEURL}/initramfs-linux.img || goto failed
+
+echo Injecting Kernel Arguments...
+imgargs vmlinuz-linux initrd=initramfs-linux.img archiso_http_srv=${BASEURL}/ archisobasedir=arch ${extrabootoptions}
+
+echo Executing EFI Handoff...
+boot || goto failed
+
+:failed
+echo
+echo Handoff failed! Dropping to shell for debugging...
+shell

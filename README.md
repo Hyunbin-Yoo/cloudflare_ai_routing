@@ -38,15 +38,16 @@ $ sudo chmod 644 /srv/tftp/ArcherC7v5_tp_recovery.bin
 ```bash
 # Identify the name of the Ethernet interface connected to the router
 $ ifconfig
+enp6s0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
 
 # Remove the current IP address of the interface
-$ sudo ip addr flush dev enp7s0f3u2    # replace 'enp7s0f3u2' with your interface name
+$ sudo ip addr flush dev enp6s0    # replace 'enp6s0' with your interface name
 
 # Set IP address to 192.168.0.66, which the router expects during TFTP recovery
-$ sudo ip addr add 192.168.0.66/24 dev enp7s0f3u2
+$ sudo ip addr add 192.168.0.66/24 dev enp6s0
 
 # Explicitly enable the interface
-$ sudo ip link set dev enp7s0f3u2 up
+$ sudo ip link set dev enp6s0 up
 ```
 
 #### Configure the TFTP Server
@@ -87,15 +88,15 @@ Once the router reboots and the Ethernet backlight is on,
 
 ```bash
 # Remove current IP address of interface since OpenWRT uses 192.168.1.0/24 by default
-$ sudo ip addr flush dev enp7s0f3u2    # replace 'enp7s0f3u2' with your interface name
+$ sudo ip addr flush dev enp6s0    # replace 'enp6s0' with your interface name
 
 # Restart NetworkManager, which automatically requests a new IP
 $ sudo systemctl restart NetworkManager
 
 # Confirm that a 192.168.1.0/24 address is present
-$ ip -4 a show dev enp7s0f3u2
-21: enp7s0f3u2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
-    inet 192.168.1.181/24 brd 192.168.1.255 scope global dynamic noprefixroute enp7s0f3u2
+$ ip -4 a show dev enp6s0
+2: enp6s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    inet 192.168.1.142/24 brd 192.168.1.255 scope global dynamic noprefixroute enp6s0
        valid_lft 43191sec preferred_lft 43191sec
 ```
 
@@ -273,15 +274,16 @@ End of Day 1. Locked down the Router and configured secure in-site access. I pla
 ## Day 2: Laptop Setup
 
 ### Configure Provisioning Environment
-Now that the router is locked down both my Workstation and my Laptop are connected to it, through which outbound traffic goes through. The Workstation no longer has a separate connection. I restarted both the Router and the Workstation to confirm that Router settings persist through reboots. I moved the USB-to-Ethernet adapter I am using from the front to the back for stability.
+Now that the router is locked down both my Workstation and my Laptop are connected to it, through which outbound traffic goes through. The Workstation no longer has a separate connection. I restarted both the Router and the Workstation to confirm that Router settings persist through reboots.
 
 #### Set up Static IP
 ```bash
 # Check IP Address
-$ ip -4 a show dev enp7s0f1u3u4    # Interface Name changed because I moved the UtE Adapter to a different port
-5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
-    inet 192.168.1.181/24 brd 192.168.1.255 scope global dynamic noprefixroute enp7s0f1u3u4
-       valid_lft 41483sec preferred_lft 41483sec
+$ ip -4 a show dev enp6s0    
+2: enp6s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    altname enx18c04d98050e
+    inet 192.168.1.142/24 brd 192.168.1.255 scope global dynamic noprefixroute enp6s0
+       valid_lft 42727sec preferred_lft 42727sec
 ```
 
 Although the Router was rebooted, the Workstation requested the same IP and succeeded. Since PXE requires a fixed address, we will use Static IP to guarantee that the Workstation's IP never changes.
@@ -289,15 +291,16 @@ Although the Router was rebooted, the Workstation requested the same IP and succ
 ```bash
 # Find MAC Address
 $ ip link show dev enp7s0f1u3u4
-5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
-    link/ether [USB-to-Ethernet Adapter MAC] brd ff:ff:ff:ff:ff:ff
+2: enp6s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether [Ethernet MAC] brd ff:ff:ff:ff:ff:ff
 
 # Configure Static IP on Router
 $ ssh openwrt
 root@OpenWrt:~# uci add dhcp host
 cfg05fe63
 root@OpenWrt:~# uci set dhcp.@host[-1].name='workstation-arch'
-root@OpenWrt:~# uci set dhcp.@host[-1].mac='[USB-to-Ethernet Adapter MAC]'
+root@OpenWrt:~# uci set dhcp.@host[-1].mac='[Ethernet MAC]'
+# Assign a new fixed IP instead of the IP automatically assigned
 root@OpenWrt:~# uci set dhcp.@host[-1].ip='192.168.1.181'
 root@OpenWrt:~# uci commit dhcp
 root@OpenWrt:~# /etc/init.d/dnsmasq restart
@@ -326,14 +329,17 @@ $ sudo find /var/lib/NetworkManager/ -name "*.lease" -delete    # Same, this del
 Before restarting NetworkManager, open a second terminal tab and use ```tcpdump``` so that the frames can be captured.
 ```bash
 # Port 67 for the DHCP server, Port 68 for the DHCP client
-$ sudo tcpdump -i enp7s0f1u3u4 port 67 or port 68 -env
-tcpdump: listening on enp7s0f1u3u4, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+$ sudo tcpdump -i enp6s0 port 67 or port 68 -env
+tcpdump: listening on enp6s0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 ```
 
 Return to the first terminal and restart NetworkManager.
 ```bash
 # Restart NetworkManager to force a pure DHCPDISCOVER
 $ sudo systemctl start NetworkManager
+# If NetworkManager does not automatically reestablish connection, manually reconnect
+$ nmcli device connect enp6s0 
+Device 'enp6s0' successfully activated with '[UUID]'.
 ```
 
 Then look at the frames captured by ```tcpdump```.
@@ -351,13 +357,13 @@ Then look at the frames captured by ```tcpdump```.
 	    Vendor-Class (60), length 12: "udhcp 1.36.1"
 	    Client-ID (61), length 7: ether [Router MAC]
 	    
-14:22:43.671920 [USB-to-Ethernet Adapter MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 318: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 304)
-    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [USB-to-Ethernet Adapter MAC], length 276, xid 0x787404e9, secs 7, Flags [none]
-	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+14:22:43.671920 [Ethernet MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 318: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 304)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [Ethernet MAC], length 276, xid 0x787404e9, secs 7, Flags [none]
+	  Client-Ethernet-Address [Ethernet MAC]
 	  Vendor-rfc1048 Extensions
 	    Magic Cookie 0x63825363
 	    DHCP-Message (53), length 1: Discover
-	    Client-ID (61), length 7: ether [USB-to-Ethernet Adapter MAC]
+	    Client-ID (61), length 7: ether [Ethernet MAC]
 	    Parameter-Request (55), length 17: 
 	      Subnet-Mask (1), Time-Zone (2), Domain-Name-Server (6), Hostname (12)
 	      Domain-Name (15), MTU (26), BR (28), Classless-Static-Route (121)
@@ -366,11 +372,11 @@ Then look at the frames captured by ```tcpdump```.
 	      RP (17)
 	    MSZ (57), length 2: 576
 	    
-14:22:43.685745 [Router MAC] > [USB-to-Ethernet Adapter MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3137, offset 0, flags [none], proto UDP (17), length 343)
+14:22:43.685745 [Router MAC] > [Ethernet MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3137, offset 0, flags [none], proto UDP (17), length 343)
     192.168.1.1.67 > 192.168.1.181.68: BOOTP/DHCP, Reply, length 315, xid 0x787404e9, secs 7, Flags [none]
 	  Your-IP 192.168.1.181
 	  Server-IP 192.168.1.1
-	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Client-Ethernet-Address [Ethernet MAC]
 	  Vendor-rfc1048 Extensions
 	    Magic Cookie 0x63825363
 	    DHCP-Message (53), length 1: Offer
@@ -385,13 +391,13 @@ Then look at the frames captured by ```tcpdump```.
 	    Domain-Name (15), length 3: "lan"
 	    Hostname (12), length 16: "workstation-arch"
 	    
-14:22:43.685825 [USB-to-Ethernet Adapter MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 330: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 316)
-    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [USB-to-Ethernet Adapter MAC], length 288, xid 0x787404e9, secs 7, Flags [none]
-	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+14:22:43.685825 [Ethernet MAC] > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 330: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP (17), length 316)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from [Ethernet MAC], length 288, xid 0x787404e9, secs 7, Flags [none]
+	  Client-Ethernet-Address [Ethernet MAC]
 	  Vendor-rfc1048 Extensions
 	    Magic Cookie 0x63825363
 	    DHCP-Message (53), length 1: Request
-	    Client-ID (61), length 7: ether [USB-to-Ethernet Adapter MAC]
+	    Client-ID (61), length 7: ether [Ethernet MAC]
 	    Parameter-Request (55), length 17: 
 	      Subnet-Mask (1), Time-Zone (2), Domain-Name-Server (6), Hostname (12)
 	      Domain-Name (15), MTU (26), BR (28), Classless-Static-Route (121)
@@ -402,11 +408,11 @@ Then look at the frames captured by ```tcpdump```.
 	    Requested-IP (50), length 4: 192.168.1.181
 	    Server-ID (54), length 4: 192.168.1.1
 	    
-14:22:43.701104 [Router MAC] > [USB-to-Ethernet Adapter MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3138, offset 0, flags [none], proto UDP (17), length 343)
+14:22:43.701104 [Router MAC] > [Ethernet MAC], ethertype IPv4 (0x0800), length 357: (tos 0xc0, ttl 64, id 3138, offset 0, flags [none], proto UDP (17), length 343)
     192.168.1.1.67 > 192.168.1.181.68: BOOTP/DHCP, Reply, length 315, xid 0x787404e9, secs 7, Flags [none]
 	  Your-IP 192.168.1.181
 	  Server-IP 192.168.1.1
-	  Client-Ethernet-Address [USB-to-Ethernet Adapter MAC]
+	  Client-Ethernet-Address [Ethernet MAC]
 	  Vendor-rfc1048 Extensions
 	    Magic Cookie 0x63825363
 	    DHCP-Message (53), length 1: ACK
@@ -424,74 +430,76 @@ Then look at the frames captured by ```tcpdump```.
 
 The first frame is the Router initiating DORA with the upstream network. Only the Discovery was caught because only Discover and Request are broadcast frames, and by the time the Request frame came back, the Router likely contained the WAN interface. The next four frames each represent each of the DORA sequence between the Workstation and the Router.
 
+The captured frames confirm that the router assigned the fixed IP based on the Ethernet Adapter's MAC.
+
+#### Prepare the first part of PXE chainloading
 ```bash
-# Confirm that Static IP allocation is happening due to Router settings and not Client-side cache
-$ ip -4 a show dev enp7s0f1u3u4
-5: enp7s0f1u3u4: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
-    inet 192.168.1.181/24 brd 192.168.1.255 scope global dynamic noprefixroute enp7s0f1u3u4
-       valid_lft 42182sec preferred_lft 42182sec
-```
-
-#### Prepare files PXE Provisioning Server on Workstation
-```bash
-# Download Arch Linux ISO
-$ curl -L -o /tmp/archlinux-x86_64.iso https://mirror.rackspace.com/archlinux/iso/latest/archlinux-x86_64.iso
-# Download its SHA-256 hash
-$ curl -L -o /tmp/sha256sums.txt https://mirror.rackspace.com/archlinux/iso/latest/sha256sums.txt
-
-# Confirm ISO Integrity without using cd, instead using pipes
-$ grep "archlinux-x86_64.iso" /tmp/sha256sums.txt | sed 's|archlinux-x86_64.iso|/tmp/archlinux-x86_64.iso|' | sha256sum -c -
-/tmp/archlinux-x86_64.iso: OK
-
-# Mount the Arch ISO
-$ sudo mount -o loop /tmp/archlinux-x86_64.iso /mnt
-
-# Copy the kernel, initramfs, and squashfs OS images to provisioning server
-$ sudo sudo mkdir -p /srv/http/provision
-$ sudo cp /mnt/arch/boot/x86_64/vmlinuz-linux /srv/http/provision/vmlinuz-linux
-$ sudo cp /mnt/arch/boot/x86_64/initramfs-linux.img /srv/http/provision/initramfs-linux.img
-$ sudo cp -r /mnt/arch /srv/http/provision/arch
-
-# Unmount the ISO
-$ sudo umount /mnt
-
-# Clean up temporary files
-$ rm /tmp/archlinux-x86_64.iso /tmp/sha256sums.txt
-
-# Download vanilla iPXE bootloader from the official source
-$ sudo curl -o /srv/tftp/ipxe-arch.efi https://boot.ipxe.org/x86_64-efi/ipxe.efi
+# Download Arch's official iPXE file and save it to the TFTP directory
+$ curl -o /srv/tftp/ipxe-arch.efi https://archlinux.org/static/netboot/ipxe-arch.efi
 
 # Modify permissions so that TFTP daemon can read the file
 $ sudo chmod 644 /srv/tftp/ipxe-arch.efi
 ```
 
+We can't use this file as is because it will connect online to fetch the next chainloading file. Since we want to self-host the crucial Arch files to be resistant from supply chain attacks, we hex edit the file so that the URL points to the Workstation.
+
+```bash
+# Find the URL
+$ strings /srv/tftp/ipxe-arch.efi | grep "http"
+chain https://ipxe.archlinux.org/releng/netboot/archlinux.ipxe || shell
+http://ca.ipxe.org/auto
+http://x1.i.lencr.org/0'
+http://x1.c.lencr.org/0"
+http://ipxe.org/cfg/%s
+http
+http_step
+https
+See http://ipxe.org/cmd/%s for further information
+%s (http://ipxe.org/%08x)
+Error %#08x (http://ipxe.org/%08x)
+[36mhttp://ipxe.org
+```
+
+Here we replace ```https://ipxe.archlinux.org/releng/netboot/archlinux.ipxe``` with ```http://192.168.1.181/boot.ipxe```. We can either manually hex edit or use a simple chain of commands. Below is the CLI way.
+
+```
+# Define the old and new strings
+$ OLD="https://ipxe.archlinux.org/releng/netboot/archlinux.ipxe"
+$ NEW="http://192.168.1.181/boot.ipxe"
+
+# Calculate their difference in length
+$ PAD_LEN=$(( ${#OLD} - ${#NEW} ))
+$ echo ${PAD_LEN}
+26
+
+# Since new string is shorter, prepare padding composed of null bytes to ensure that the binary patch retains the total length of the file
+$ PADDING=$(printf '\\x00%.0s' $(seq 1 ${PAD_LEN}))
+
+# Patch the binary file
+sudo sed -b -i "s|${OLD}|${NEW}${PADDING}|" /srv/tftp/ipxe-arch.efi
+```
+
+#### Prepare Arch Linux files on TFTP Directory
+```bash
+$ prepare_ipxe.sh
+```
+
 #### Write custom iPXE file on Workstation
 ```bash
 $ sudo tee /srv/http/provision/boot.ipxe > /dev/null << 'EOF'
-#!ipxe
-echo =========================================
-echo Arch Linux Provisioning Service v1.0
-echo =========================================
-
-# Ensure the interface is fully initialized
-dhcp
-
-# Set the base URL variable for your Workstation
-set srv http://192.168.1.181/provision
-
-# Load the kernel and inject the local HTTP hooks and automation script
-kernel ${srv}/vmlinuz-linux ip=dhcp archisobasedir=arch archiso_http_srv=${srv}/ script=${srv}/autoinstall.sh
-initrd ${srv}/initramfs-linux.img
-
-# Execute
-boot
-EOF
 ```
 
+## Day 3: Provisioning
+### Finish Provisioning
+
 #### Write custom installation script on Workstation
-
 ```bash
+# Generate SSH key dedicated for Ansible
+$ ssh-keygen -t ed25519 -f ~/.ssh/ansible_arch -C "ansible@workstation"
 
+# Write the Archinstall script
+$ sudo tee /srv/http/provision/autoinstall.sh > /dev/null << 'OUTER_EOF'
+OUTER_EOF
 ```
 
 #### Start the Provisioning Servers on Workstation
@@ -507,27 +515,51 @@ $ ss -uln | grep 192.168.1.181:69
 UNCONN 0      0                                 192.168.1.181:69         0.0.0.0:*
 
 # Start HTTP
-$ sudo python3 -m http.server 80 --directory /srv/http/provision
-Serving HTTP on 0.0.0.0 port 80 (http://0.0.0.0:80/) ...
+$ sudo python3 -m http.server 80 --bind 192.168.1.181 --directory /srv/http/provision
+Serving HTTP on 192.168.1.181 port 80 (http://192.168.1.181:80/) ...
 ```
 
 #### Configure Router to direct Laptop to Workstation Servers
+Our goal is to install Arch Linux fully automatically once PXE boot is selected in the laptop's screen. However, native PXE is insufficient to deliver the entire Arch Linux system. Therefore, we chain PXE with iPXE, its modern counterpart.
+
+When the laptop first boots in PXE, the router sees the broadcast and directs the laptop to the iPXE file. The laptop fetches the iPXE file and boots in iPXE.
+
+When the laptop broadcasts while in iPXE, the router notices that the environment is iPXE and directs the laptop to the ```boot.ipxe``` file. This is done through tagging. The router tags iPXE traffic with the ```ipxe``` tag to act differently compared to vanilla PXE.
+
+The ```boot.ipxe``` file fetches the Arch Linux files as well as the ```autoinstall.sh``` to automatically install Arch Linux.
+
+
 ```bash
 $ ssh openwrt
-# Tag DHCP Broadcasts that include iPXE in their headers as 'ipxe'
-root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_userclass='set:ipxe,iPXE'
-# If not 'ipxe', direct to TFTP
-root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_boot='tag:!ipxe,ipxe.efi,192.168.1.181,192
-.168.1.181'
-# If 'ipxe', direct to iPXE
-root@OpenWrt:~# uci add_list dhcp.@dnsmasq[0].dhcp_boot='tag:ipxe,http://192.168.1.181/provis
-ion/boot.ipxe,192.168.1.181,192.168.1.181'
+# Create a tag named 'ipxe_tag'
+root@OpenWrt:~# uci set dhcp.ipxe_tag='userclass'
+# The condition is that the broadcast contains the string 'iPXE'
+root@OpenWrt:~# uci set dhcp.ipxe_tag.userclass='iPXE'
+# Tag named 'ipxe' is applied when the condition is satisfied
+root@OpenWrt:~# uci set dhcp.ipxe_tag.networkid='ipxe'
+
+# Serve iPXE file to vanilla PXE boot
+root@OpenWrt:~# uci set dhcp.pxe='boot'
+root@OpenWrt:~# uci set dhcp.pxe.networkid='!ipxe'
+root@OpenWrt:~# uci set dhcp.pxe.filename='ipxe-arch.efi'
+root@OpenWrt:~# uci set dhcp.pxe.servername='workstation-arch'
+root@OpenWrt:~# uci set dhcp.pxe.serveraddress='192.168.1.181'
+
+# Serve Arch Linux chain to iPXE boot
+root@OpenWrt:~# uci set dhcp.ipxe='boot'
+root@OpenWrt:~# uci set dhcp.ipxe.networkid='ipxe'
+root@OpenWrt:~# uci set dhcp.ipxe.filename='http://192.168.1.181/boot.ipxe'
+root@OpenWrt:~# uci set dhcp.ipxe.servername='workstation-arch'
+root@OpenWrt:~# uci set dhcp.ipxe.serveraddress='192.168.1.181'
+
 root@OpenWrt:~# uci commit dhcp
 root@OpenWrt:~# /etc/init.d/dnsmasq restart
 
-# Confirm that the setting was applied
-root@OpenWrt:~# cat /var/etc/dnsmasq.conf.cfg* | grep dhcp-boot
-dhcp-boot=tag:!ipxe,ipxe.efi,192.168.1.181,192.168.1.181 tag:ipxe,http://192.168.1.181/provision/boot.ipxe,192.168.1.181,192.168.1.181
+# Confirm that the settings were actually applied
+root@OpenWrt:~# cat /var/etc/dnsmasq.conf.cfg* | grep -E 'boot|userclass'
+dhcp-boot=tag:!ipxe,ipxe-arch.efi,workstation-arch,192.168.1.181
+dhcp-boot=tag:ipxe,http://192.168.1.181/boot.ipxe,workstation-arch,192.168.1.181
+dhcp-userclass=set:ipxe,iPXE
 root@OpenWrt:~# exit
 ```
 
@@ -535,7 +567,8 @@ root@OpenWrt:~# exit
 Go to your laptop and power it on. Repeatedly press the Fx keys as soon as the laptop starts booting. Disable Secure Boot (Since iPXE is not signed by Microsoft), enable Network Boot, and select PXE Boot.
 
 ```bash
-
+# Open a port on the Workstation to receive the mirrored Terminal output from the laptop
+$ while true; do nc -lvn 192.168.1.181 9000 | tee -a live_install.log; done
 ```
 
-Day 2 took significantly longer than I thought. PXE was quite fragile and I learned a lot while troubleshooting. Read a lot of tcpdump output to diagnose what exactly was going wrong. On Day 3 I will finish the autoinstall.sh script and automatically provision my Laptop with Arch Linux. I will then write an Ansible playbook that does the rest of the configuration, completing the interventionless workflow.
+As of now there is a problem where the Archinstall script hangs waiting for the network although it is configured.
