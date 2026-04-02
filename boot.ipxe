@@ -5,7 +5,7 @@ echo            Arch Linux IPXE
 echo ============================================
 
 set BASEURL http://192.168.1.181
-set extrabootoptions ip=dhcp copytoram=y rfkill.default_state=0 ipv6.disable=1 script=${BASEURL}/autoinstall.sh
+set extrabootoptions ip=dhcp copytoram=y module_blacklist=mac80211,cfg80211 ipv6.disable=1 script=${BASEURL}/autoinstall.sh
 
 echo Downloading and Verifying Kernel...
 kernel ${BASEURL}/vmlinuz-linux || goto failed

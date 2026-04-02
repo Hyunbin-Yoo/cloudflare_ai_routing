@@ -571,4 +571,4 @@ Go to your laptop and power it on. Repeatedly press the Fx keys as soon as the l
 $ while true; do nc -lvn 192.168.1.181 9000 | tee -a live_install.log; done
 ```
 
-As of now there is a problem where the Archinstall script hangs waiting for the network although it is configured.
+As of now there is a problem where the Archinstall script hangs waiting for the network although it is configured. We work around this by Ctrl+Alt+F3 ing to a new TTY and running the script.

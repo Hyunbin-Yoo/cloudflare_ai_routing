@@ -42,7 +42,9 @@ ROOT_PART=${DISK_INTERFACE}${PART_SUFFIX}2
 
 # Force the kernel to re-read the partition table
 echo -e "Reloading Partition Table\n"
-partprobe ${DISK_INTERFACE}
+swapoff -a || true
+vgchange -an || true
+blockdev --rereadpt "${DISK_INTERFACE}" || partprobe "${DISK_INTERFACE}"
 
 # Wait for udev to create the nodes
 echo -e "Waiting for node creation\n"
